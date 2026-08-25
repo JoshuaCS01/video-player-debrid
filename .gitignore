@@ -2,6 +2,7 @@ videos.json
 playlist.json
 files.txt
 smbfiles.txt
+fullNew.pls
 importer.py
 .env
 .env.*
@@ -35,4 +36,3 @@ dist/
 Thumbs.db
 Desktop.ini
 .DS_Store
-

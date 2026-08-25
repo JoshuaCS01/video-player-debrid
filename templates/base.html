@@ -16,7 +16,8 @@
       <span>Home Media</span>
     </a>
     <nav aria-label="Main navigation">
-      <a href="{{ url_for('home') }}" {% if request.endpoint == 'home' %}aria-current="page"{% endif %}>Library</a>
+      <a href="{{ url_for('home') }}" {% if request.endpoint == 'home' %}aria-current="page"{% endif %}>Favorites</a>
+      <a href="{{ url_for('library_page') }}" {% if request.endpoint and request.endpoint.startswith('library_') %}aria-current="page"{% endif %}>Library</a>
       <a href="{{ url_for('debrid') }}" {% if request.endpoint == 'debrid' %}aria-current="page"{% endif %}>Real-Debrid</a>
     </nav>
   </header>

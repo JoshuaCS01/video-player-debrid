@@ -12,6 +12,7 @@ from werkzeug.security import safe_join
 
 from media_manager.config import AppConfig
 from media_manager.debrid import DebridError, RealDebridClient
+from media_manager.pls_library import PLSLibrary
 from media_manager.storage import PlaylistStore
 from media_manager.thumbnails import ThumbnailService
 
@@ -23,9 +24,13 @@ def create_app(config: AppConfig | None = None) -> Flask:
     app.config.update(SECRET_KEY=settings.secret_key, APP_SETTINGS=settings)
 
     playlist = PlaylistStore(settings.playlist_path)
+    full_library = PLSLibrary(settings.library_playlist_path or settings.data_dir / "fullNew.pls")
     debrid_client = RealDebridClient(settings.real_debrid_token, details_cache_path=settings.debrid_details_cache_path)
     thumbnails = ThumbnailService(settings.smb_folder, settings.thumbnail_cache_dir, settings.ffmpeg_path)
-    app.extensions.update(playlist_store=playlist, debrid_client=debrid_client, thumbnail_service=thumbnails)
+    app.extensions.update(
+        playlist_store=playlist, pls_library=full_library,
+        debrid_client=debrid_client, thumbnail_service=thumbnails,
+    )
 
     @app.route("/", methods=["GET", "POST"])
     def home():
@@ -40,7 +45,23 @@ def create_app(config: AppConfig | None = None) -> Flask:
             videos, library_error = [], str(exc)
         response = render_template("index.html", videos=videos, library_error=library_error)
         elapsed_ms = (time.perf_counter() - started) * 1000
-        app.logger.info("Library response: %d items, %d cached thumbnails, %.1f ms", len(videos), sum(video.get("thumbnail_cached", False) for video in videos), elapsed_ms)
+        app.logger.info("Favorites response: %d items, %d cached thumbnails, %.1f ms", len(videos), sum(video.get("thumbnail_cached", False) for video in videos), elapsed_ms)
+        return response
+
+    @app.route("/library", methods=["GET", "POST"])
+    def library_page():
+        if request.method == "POST":
+            return library_heresphere()
+        started = time.perf_counter()
+        try:
+            stored_videos, library_error = full_library.all(), None
+            videos = [dict(video, thumbnail_cached=thumbnails.has_disk_cache(video)) for video in stored_videos]
+        except (OSError, ValueError) as exc:
+            app.logger.warning("Unable to load fullNew.pls: %s", exc)
+            videos, library_error = [], str(exc)
+        response = render_template("library.html", videos=videos, library_error=library_error)
+        elapsed_ms = (time.perf_counter() - started) * 1000
+        app.logger.info("PLS library response: %d items, %d cached thumbnails, %.1f ms", len(videos), sum(video.get("thumbnail_cached", False) for video in videos), elapsed_ms)
         return response
 
     @app.get("/debrid")
@@ -69,8 +90,24 @@ def create_app(config: AppConfig | None = None) -> Flask:
         return heresphere_response({
             "access": 1,
             "library": [{
-                "name": "Media library",
+                "name": "Favorites",
                 "list": [url_for("heresphere_video", item_id=video["id"], _external=True) for video in videos],
+            }],
+        })
+
+    @app.route("/library/heresphere", methods=["GET", "POST"])
+    @app.route("/library/heresphere/", methods=["GET", "POST"])
+    def library_heresphere():
+        try:
+            videos = full_library.all()
+        except (OSError, ValueError) as exc:
+            app.logger.exception("Unable to build HereSphere Library from fullNew.pls")
+            abort(503, str(exc))
+        return heresphere_response({
+            "access": 1,
+            "library": [{
+                "name": "Library",
+                "list": [url_for("library_heresphere_video", item_id=video["id"], _external=True) for video in videos],
             }],
         })
 
@@ -96,6 +133,36 @@ def create_app(config: AppConfig | None = None) -> Flask:
             "title": video.get("title") or f"Video {item_id}",
             "description": video.get("title") or "",
             "thumbnailImage": url_for("thumbnail", item_id=item_id, _external=True),
+            "tags": tags,
+            "media": [{"name": "Direct", "sources": [{"url": source_url}]}],
+            "isFavorite": False,
+            "writeFavorite": False,
+            "writeRating": False,
+            "writeTags": False,
+            "writeHSP": False,
+        })
+
+    @app.route("/library/heresphere/video/<int:item_id>", methods=["GET", "POST"])
+    def library_heresphere_video(item_id: int):
+        try:
+            video = full_library.get(item_id)
+        except (OSError, ValueError) as exc:
+            abort(503, str(exc))
+        if video is None:
+            abort(404, "Library video not found")
+        source_url = (
+            str(video["url"]) if thumbnails.is_remote(str(video["url"]))
+            else url_for("library_stream", item_id=item_id, _external=True)
+        )
+        request_data = request.get_json(silent=True) or {}
+        if request_data.get("needsMediaSource", True):
+            app.logger.info("Clicked video: %s", video["title"])
+        tags = [] if video["available"] else [{"name": "Status:Unavailable"}]
+        return heresphere_response({
+            "access": 1,
+            "title": video["title"],
+            "description": video.get("missing_reason") or video["title"],
+            "thumbnailImage": url_for("library_thumbnail", item_id=item_id, _external=True),
             "tags": tags,
             "media": [{"name": "Direct", "sources": [{"url": source_url}]}],
             "isFavorite": False,
@@ -137,6 +204,47 @@ def create_app(config: AppConfig | None = None) -> Flask:
         if not filename:
             abort(404, "Local media filename is invalid")
         return redirect(url_for("smb", filename=filename))
+
+    @app.get("/library/play/<int:item_id>")
+    def library_play(item_id: int):
+        try:
+            video = full_library.get(item_id)
+        except (OSError, ValueError) as exc:
+            abort(503, str(exc))
+        if video is None:
+            abort(404, "Library video not found")
+        app.logger.info("Clicked video: %s", video["title"])
+        if thumbnails.is_remote(str(video["url"])):
+            return redirect(str(video["url"]), code=302)
+        return redirect(url_for("library_stream", item_id=item_id))
+
+    @app.get("/library/stream/<int:item_id>")
+    def library_stream(item_id: int):
+        try:
+            video = full_library.get(item_id)
+        except (OSError, ValueError) as exc:
+            abort(503, str(exc))
+        if video is None:
+            abort(404, "Library video not found")
+        if thumbnails.is_remote(str(video["url"])):
+            return redirect(str(video["url"]), code=302)
+        source_path = video.get("source_path")
+        if not source_path:
+            abort(404, "Library file has no usable path")
+        try:
+            file_status = os.stat(source_path)
+        except (FileNotFoundError, NotADirectoryError):
+            app.logger.warning("Library file is missing: %s", source_path)
+            abort(404, "Library file is missing or unavailable")
+        except PermissionError as exc:
+            app.logger.error("Library file is inaccessible: %s", exc)
+            abort(503, "Library file is inaccessible")
+        except OSError as exc:
+            app.logger.error("Library file access failed: %s", exc)
+            abort(503, "Library file access failed")
+        if not stat.S_ISREG(file_status.st_mode):
+            abort(404, "Library file is missing or unavailable")
+        return send_file(source_path, conditional=True)
 
     @app.get("/smb/<path:filename>")
     def smb(filename: str):
@@ -182,7 +290,7 @@ def create_app(config: AppConfig | None = None) -> Flask:
                 video.get("bookmark_path", video["filename"]),
             )
             added = playlist.add_bookmark(video["filename"], bookmark_url)
-            flash("Added to your library." if added else "Already in your library.", "success")
+            flash("Added to Favorites." if added else "Already in Favorites.", "success")
         except IndexError:
             abort(404, "Video not found")
         except (DebridError, OSError, ValueError) as exc:
@@ -190,9 +298,38 @@ def create_app(config: AppConfig | None = None) -> Flask:
             flash(str(exc), "error")
         return redirect(url_for("debrid"))
 
+    @app.post("/favorites/<int:item_id>/remove")
+    def remove_favorite(item_id: int):
+        try:
+            removed = playlist.remove(item_id)
+            if removed is None:
+                flash("Favorite was not found; nothing was removed.", "error")
+            else:
+                flash(f'Removed "{removed.get("title") or "item"}" from Favorites.', "success")
+        except (OSError, ValueError) as exc:
+            app.logger.exception("Unable to remove favorite %s", item_id)
+            flash(f"Could not remove Favorite: {exc}", "error")
+        return redirect(url_for("home"))
+
     @app.get("/thumbnail/<int:item_id>")
     def thumbnail(item_id: int):
         video = playlist.get(item_id)
+        if video is None:
+            abort(404)
+        image = thumbnails.thumbnail_for(video)
+        if image is None:
+            response = send_from_directory(app.static_folder, "img/placeholder.svg")
+            response.headers["Cache-Control"] = "no-store"
+            response.headers["X-Thumbnail-State"] = thumbnails.status_for(video)["state"]
+            return response
+        return send_file(image, conditional=True, max_age=86400)
+
+    @app.get("/library/thumbnail/<int:item_id>")
+    def library_thumbnail(item_id: int):
+        try:
+            video = full_library.get(item_id)
+        except (OSError, ValueError):
+            video = None
         if video is None:
             abort(404)
         image = thumbnails.thumbnail_for(video)
@@ -211,6 +348,17 @@ def create_app(config: AppConfig | None = None) -> Flask:
         thumbnails.record_status_poll(1)
         return thumbnails.status_for(video)
 
+    @app.get("/library/thumbnail/<int:item_id>/status")
+    def library_thumbnail_status(item_id: int):
+        try:
+            video = full_library.get(item_id)
+        except (OSError, ValueError):
+            video = None
+        if video is None:
+            abort(404)
+        thumbnails.record_status_poll(1)
+        return thumbnails.status_for(video)
+
     @app.get("/thumbnails/status")
     def thumbnail_status_batch():
         requested_ids = []
@@ -224,6 +372,22 @@ def create_app(config: AppConfig | None = None) -> Flask:
         thumbnails.record_status_poll(len(statuses))
         return {"items": statuses}
 
+    @app.get("/library/thumbnails/status")
+    def library_thumbnail_status_batch():
+        requested_ids = []
+        for value in request.args.get("ids", "").split(",")[:200]:
+            try:
+                requested_ids.append(int(value))
+            except ValueError:
+                continue
+        try:
+            videos = {video["id"]: video for video in full_library.all()}
+        except (OSError, ValueError):
+            videos = {}
+        statuses = {str(item_id): thumbnails.status_for(videos[item_id]) for item_id in requested_ids if item_id in videos}
+        thumbnails.record_status_poll(len(statuses))
+        return {"items": statuses}
+
     @app.get("/health")
     def health():
         return {"status": "ok", "items": playlist.count(), "thumbnails": thumbnails.metrics()}
@@ -233,7 +397,7 @@ def create_app(config: AppConfig | None = None) -> Flask:
     @app.errorhandler(502)
     @app.errorhandler(503)
     def http_error(error):
-        if request.path.startswith("/thumbnail/"):
+        if request.path.startswith(("/thumbnail/", "/library/thumbnail/")):
             return send_from_directory(app.static_folder, "img/placeholder.svg")
         return render_template("error.html", error=error), getattr(error, "code", 500)
 

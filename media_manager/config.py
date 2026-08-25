@@ -31,6 +31,7 @@ class AppConfig:
     home_url: str | None
     ffmpeg_path: Path | None
     debrid_details_cache_path: Path | None = None
+    library_playlist_path: Path | None = None
     host: str = "0.0.0.0"
     port: int = 8080
     secret_key: str = ""
@@ -40,6 +41,7 @@ class AppConfig:
         resources, data = _resource_dir(), Path(data_dir) if data_dir else _data_dir()
         load_dotenv(data / ".env", override=False)
         smb_value, ffmpeg_value = os.getenv("SMB_FOLDER", "").strip(), os.getenv("FFMPEG_PATH", "").strip()
+        library_playlist_value = os.getenv("LIBRARY_PLAYLIST", "").strip()
         bundled_ffmpeg = resources / "bin" / "ffmpeg.exe"
         discovered_ffmpeg = shutil.which("ffmpeg")
         ffmpeg = Path(ffmpeg_value) if ffmpeg_value else (
@@ -58,6 +60,7 @@ class AppConfig:
             real_debrid_custom_id=os.getenv("REAL_DEBRID_CUSTOM_ID") or None,
             smb_folder=Path(smb_value) if smb_value else None, home_url=os.getenv("HOME_URL") or None,
             ffmpeg_path=ffmpeg, debrid_details_cache_path=data / ".cache" / "real_debrid_details.json",
+            library_playlist_path=Path(library_playlist_value) if library_playlist_value else data / "fullNew.pls",
             host=os.getenv("HOST", "0.0.0.0"), port=port,
             secret_key=os.getenv("SECRET_KEY") or secrets.token_hex(24),
         )
@@ -74,4 +77,6 @@ class AppConfig:
             warnings.append("FFmpeg is not available; uncached video thumbnails will use fallback artwork.")
         if not self.playlist_path.exists():
             warnings.append(f"Playlist not found: {self.playlist_path}")
+        if self.library_playlist_path is None or not self.library_playlist_path.exists():
+            warnings.append(f"Library playlist not found: {self.library_playlist_path or 'fullNew.pls'}")
         return warnings

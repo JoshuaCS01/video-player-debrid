@@ -14,6 +14,7 @@ import pytest
 from app import create_app
 from media_manager.config import AppConfig
 from media_manager.debrid import DebridError, RealDebridClient
+from media_manager.pls_library import PLSLibrary
 from media_manager.storage import PlaylistStore
 from media_manager.thumbnails import ThumbnailService
 
@@ -25,12 +26,28 @@ def configured_app(tmp_path: Path):
         {"id": 1, "title": "Remote title", "url": "https://example.test/video", "stars": ["Person"]},
         {"id": 2, "title": "Local title", "url": "192.168.1.2/Locker/VR/folder/movie.mp4", "stars": []},
     ]), encoding="utf-8")
+    first_folder, second_folder = tmp_path / "first", tmp_path / "nested" / "second"
+    first_folder.mkdir()
+    second_folder.mkdir(parents=True)
+    first_video, second_video = first_folder / "one.mp4", second_folder / "two.mkv"
+    first_video.write_bytes(b"first-video")
+    second_video.write_bytes(b"second-video")
+    library_playlist = tmp_path / "fullNew.pls"
+    library_playlist.write_text(
+        "[playlist]\n"
+        f"File1={first_video}\nTitle1=First library video\n"
+        f"File2={second_video}\nTitle2=Second library video\n"
+        f"File3={first_video}\nTitle3=Duplicate playlist entry\n"
+        f"File4={tmp_path / 'missing.mp4'}\nTitle4=Missing library video\n"
+        "NumberOfEntries=4\nVersion=2\n",
+        encoding="utf-8",
+    )
     source_root = Path(__file__).resolve().parents[1]
     settings = AppConfig(
         resource_dir=source_root, data_dir=tmp_path, playlist_path=playlist,
         thumbnail_cache_dir=tmp_path / ".cache", real_debrid_token=None,
         real_debrid_custom_id=None, smb_folder=tmp_path, home_url=None,
-        ffmpeg_path=None, secret_key="test",
+        ffmpeg_path=None, library_playlist_path=library_playlist, secret_key="test",
     )
     app = create_app(settings)
     app.config.update(TESTING=True)
@@ -41,6 +58,7 @@ def test_home_and_health(configured_app):
     client = configured_app.test_client()
     response = client.get("/")
     assert response.status_code == 200
+    assert b"<h1>Favorites</h1>" in response.data
     assert b"Remote title" in response.data
     health = client.get("/health").json
     assert health["status"] == "ok"
@@ -64,7 +82,7 @@ def test_heresphere_api_exposes_ordered_library_and_direct_sources(configured_ap
     assert library.headers["HereSphere-JSON-Version"] == "1"
     assert library.headers["Cache-Control"] == "no-store"
     assert library.json["access"] == 1
-    assert library.json["library"][0]["name"] == "Media library"
+    assert library.json["library"][0]["name"] == "Favorites"
     assert library.json["library"][0]["list"] == [
         "http://localhost/heresphere/video/1",
         "http://localhost/heresphere/video/2",
@@ -94,6 +112,8 @@ def test_main_page_preserves_direct_links_and_excludes_heresphere_controls_from_
     main = client.get("/")
     assert b"data-shuffle-button" not in main.data
     assert b"data-heresphere-help" in main.data
+    assert b"Remove from Favorites" in main.data
+    assert b"window.confirm" in main.data
     assert b"data-play-link" in main.data
     assert b'href="/play/1"' in main.data
     assert b'href="/heresphere' not in main.data
@@ -105,6 +125,71 @@ def test_main_page_preserves_direct_links_and_excludes_heresphere_controls_from_
     assert 'link.setAttribute("download", "")' in script
     assert "window.location.assign" not in script
     assert 'searchParams.set("shuffle"' not in script
+    css = (Path(__file__).resolve().parents[1] / "static" / "css" / "app.css").read_text(encoding="utf-8")
+    assert "margin-left: auto" in css and "justify-content: flex-end" in css
+    assert ".search {" in css and "position: relative" in css
+
+
+def test_remove_favorite_requires_confirm_markup_and_persists_without_deleting_media(configured_app):
+    client = configured_app.test_client()
+    settings = configured_app.config["APP_SETTINGS"]
+    before = configured_app.extensions["playlist_store"].all()
+    assert [item["id"] for item in before] == [1, 2]
+
+    page = client.get("/")
+    assert b'Remove &quot;Remote title&quot; from Favorites?' in page.data or b'Remove \\"Remote title\\" from Favorites?' in page.data
+    response = client.post("/favorites/1/remove", follow_redirects=True)
+    assert response.status_code == 200
+    assert b"Removed" in response.data
+    assert [item["id"] for item in configured_app.extensions["playlist_store"].all()] == [2]
+
+    restarted = create_app(settings)
+    assert [item["id"] for item in restarted.extensions["playlist_store"].all()] == [2]
+    assert (settings.library_playlist_path.parent / "first" / "one.mp4").is_file()
+
+
+def test_pls_library_preserves_order_duplicates_and_missing_entries(configured_app):
+    library = configured_app.extensions["pls_library"]
+    items = library.all()
+    assert [item["title"] for item in items] == [
+        "First library video", "Second library video", "Duplicate playlist entry", "Missing library video",
+    ]
+    assert items[0]["url"] == items[2]["url"]
+    assert items[0]["id"] != items[2]["id"]
+    assert items[0]["available"] is True
+    assert items[1]["available"] is True
+    assert items[3]["available"] is False
+
+
+def test_library_page_playback_and_heresphere_discovery(configured_app, caplog):
+    client = configured_app.test_client()
+    page = client.get("/library")
+    assert page.status_code == 200
+    assert b"<h1>Library</h1>" in page.data
+    assert b"First library video" in page.data and b"Second library video" in page.data
+    assert b"Duplicate playlist entry" in page.data and b"Missing library video" in page.data
+    assert b"Missing or unavailable" in page.data
+    assert b"Remove from Favorites" not in page.data
+    assert b"<video" not in page.data
+
+    with caplog.at_level(logging.INFO):
+        redirect_response = client.get("/library/play/1")
+    assert redirect_response.location.endswith("/library/stream/1")
+    assert "Clicked video: First library video" in caplog.text
+    ranged = client.get("/library/stream/1", headers={"Range": "bytes=0-4"})
+    assert ranged.status_code == 206 and ranged.data == b"first"
+    assert client.get("/library/stream/4").status_code == 404
+
+    api = client.post("/library", json={})
+    assert api.status_code == 200
+    assert api.headers["HereSphere-JSON-Version"] == "1"
+    assert api.json["library"][0]["name"] == "Library"
+    assert api.json["library"][0]["list"] == [
+        f"http://localhost/library/heresphere/video/{item_id}" for item_id in (1, 2, 3, 4)
+    ]
+    video = client.post("/library/heresphere/video/2", json={"needsMediaSource": False})
+    assert video.json["media"][0]["sources"][0]["url"] == "http://localhost/library/stream/2"
+    assert b"data-heresphere-help" not in client.get("/debrid").data
 
 
 def test_smb_route_streams_encoded_nested_paths_and_logs_clicks(tmp_path: Path, caplog):

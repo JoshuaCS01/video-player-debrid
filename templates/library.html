@@ -1,0 +1,48 @@
+{% extends "base.html" %}
+{% block title %}Library · Home Media{% endblock %}
+{% block content %}
+<section class="hero">
+  <div>
+    <p class="eyebrow">fullNew.pls</p>
+    <h1>Library</h1>
+    <p class="subtle"><span id="visibleCount">{{ videos|length }}</span> of {{ videos|length }} titles</p>
+  </div>
+  <div class="library-controls">
+    <label class="search">
+      <span class="sr-only">Search Library</span>
+      <input id="search" type="search" placeholder="Search your library…" autocomplete="off" data-media-search>
+    </label>
+    <p class="heresphere-help" data-heresphere-help hidden>
+      <strong>HereSphere Library:</strong> press Web Stream in the top-left. HereSphere controls sequential playback and Shuffle after import.
+    </p>
+  </div>
+</section>
+{% if library_error %}<div class="notice notice-error" role="alert">Could not load fullNew.pls: {{ library_error }}</div>{% endif %}
+<div id="emptyState" class="empty-state" {% if videos %}hidden{% endif %}>
+  <div class="empty-icon" aria-hidden="true">⌕</div>
+  <h2>{% if videos %}No matches found{% else %}Library is unavailable{% endif %}</h2>
+  <p>{% if videos %}Try a different title.{% else %}Place fullNew.pls beside the application or set LIBRARY_PLAYLIST.{% endif %}</p>
+</div>
+<section id="videoList" class="media-grid" aria-live="polite"
+         data-thumbnail-status-batch="{{ url_for('library_thumbnail_status_batch') }}">
+  {% for video in videos %}
+  <article class="media-card{% if not video.available %} media-card-unavailable{% endif %}" data-media-item data-search="{{ video.title }}">
+    {% if video.available %}
+    <a class="poster" href="{{ url_for('library_play', item_id=video.id) }}" aria-label="Play {{ video.title }}" data-play-link>
+    {% else %}
+    <div class="poster" aria-label="{{ video.title }} is unavailable">
+    {% endif %}
+      <img src="{% if video.thumbnail_cached %}{{ url_for('library_thumbnail', item_id=video.id) }}{% else %}{{ url_for('static', filename='img/placeholder.svg') }}{% endif %}"
+           alt="" loading="lazy" data-thumbnail-id="{{ video.id }}"
+           data-thumbnail-src="{{ url_for('library_thumbnail', item_id=video.id) }}"
+           data-thumbnail-cached="{{ 'true' if video.thumbnail_cached else 'false' }}">
+      {% if video.available %}<span class="play-button" aria-hidden="true">▶</span>{% endif %}
+    {% if video.available %}</a>{% else %}</div>{% endif %}
+    <div class="card-body">
+      <h2>{% if video.available %}<a href="{{ url_for('library_play', item_id=video.id) }}" data-play-link>{{ video.title }}</a>{% else %}{{ video.title }}{% endif %}</h2>
+      {% if video.available %}<p class="metadata">Library media</p>{% else %}<p class="metadata metadata-error">Missing or unavailable</p>{% endif %}
+    </div>
+  </article>
+  {% endfor %}
+</section>
+{% endblock %}

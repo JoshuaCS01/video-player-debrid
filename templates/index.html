@@ -1,24 +1,27 @@
 {% extends "base.html" %}
-{% block title %}Library · Home Media{% endblock %}
+{% block title %}Favorites · Home Media{% endblock %}
 {% block content %}
 <section class="hero">
   <div>
-    <p class="eyebrow">Your collection</p>
-    <h1>Media library</h1>
+    <p class="eyebrow">Your saved collection</p>
+    <h1>Favorites</h1>
     <p class="subtle"><span id="visibleCount">{{ videos|length }}</span> of {{ videos|length }} titles</p>
   </div>
   <div class="library-controls">
     <label class="search">
-      <span class="sr-only">Search titles or performers</span>
-      <input id="search" type="search" placeholder="Search your library…" autocomplete="off" data-media-search>
+      <span class="sr-only">Search Favorites</span>
+      <input id="search" type="search" placeholder="Search Favorites…" autocomplete="off" data-media-search>
     </label>
+    <p class="heresphere-help" data-heresphere-help hidden>
+      <strong>HereSphere Favorites:</strong> press Web Stream in the top-left to load these saved videos.
+    </p>
   </div>
 </section>
-{% if library_error %}<div class="notice notice-error" role="alert">Could not load the library: {{ library_error }}</div>{% endif %}
+{% if library_error %}<div class="notice notice-error" role="alert">Could not load Favorites: {{ library_error }}</div>{% endif %}
 <div id="emptyState" class="empty-state" {% if videos %}hidden{% endif %}>
   <div class="empty-icon" aria-hidden="true">⌕</div>
   <h2>{% if videos %}No matches found{% else %}Your library is empty{% endif %}</h2>
-  <p>{% if videos %}Try a different title or performer.{% else %}Add a title from Real-Debrid to get started.{% endif %}</p>
+  <p>{% if videos %}Try a different title or performer.{% else %}Add a Favorite from Real-Debrid to get started.{% endif %}</p>
 </div>
 <section id="videoList" class="media-grid" aria-live="polite"
          data-thumbnail-status-batch="{{ url_for('thumbnail_status_batch') }}">
@@ -34,6 +37,10 @@
     <div class="card-body">
       <h2><a href="{{ url_for('play', item_id=video.id) }}" data-play-link>{{ video.title }}</a></h2>
       {% if video.stars %}<p class="metadata">{{ video.stars|join(' · ') }}</p>{% else %}<p class="metadata">Media</p>{% endif %}
+      <form class="favorite-actions" method="post" action="{{ url_for('remove_favorite', item_id=video.id) }}"
+            onsubmit='return window.confirm({{ ("Remove \"" ~ video.title ~ "\" from Favorites?")|tojson }});'>
+        <button class="button-danger" type="submit">Remove from Favorites</button>
+      </form>
     </div>
   </article>
   {% endfor %}

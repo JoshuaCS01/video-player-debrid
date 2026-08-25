@@ -230,6 +230,12 @@ class ThumbnailService:
         return None
 
     def _source_for(self, video: dict, require_access: bool = True) -> tuple[str | None, str, str | None]:
+        trusted_source_path = video.get("source_path")
+        if trusted_source_path:
+            source = Path(str(trusted_source_path))
+            if require_access and not source.is_file():
+                return None, "local", f"video is missing or inaccessible: {source}"
+            return str(source), "local", None
         media_url = str(video.get("url", "")).strip()
         if self.is_remote(media_url):
             host = (urlparse(media_url).hostname or "").lower()

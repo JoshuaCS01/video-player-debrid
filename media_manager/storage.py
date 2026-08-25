@@ -40,6 +40,16 @@ class PlaylistStore:
             self._write(items)
             return True
 
+    def remove(self, item_id: int) -> dict[str, Any] | None:
+        """Remove one saved item by ID while preserving all remaining order."""
+        with self._lock:
+            items = self.all()
+            removed = next((item for item in items if item.get("id") == item_id), None)
+            if removed is None:
+                return None
+            self._write([item for item in items if item.get("id") != item_id])
+            return removed
+
     def _write(self, items: list[dict[str, Any]]) -> None:
         self.path.parent.mkdir(parents=True, exist_ok=True)
         fd, temporary = tempfile.mkstemp(prefix="playlist-", suffix=".json", dir=self.path.parent)
