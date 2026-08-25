@@ -1,6 +1,12 @@
 document.addEventListener("DOMContentLoaded", () => {
   const mediaGrid = document.getElementById("videoList");
   const statusBatchUrl = mediaGrid?.dataset.thumbnailStatusBatch;
+  const isHereSphere = /HereSphere/i.test(navigator.userAgent);
+  if (isHereSphere) {
+    document.querySelectorAll("[data-play-link]").forEach((link) => link.setAttribute("download", ""));
+    const help = document.querySelector("[data-heresphere-help]");
+    if (help) help.hidden = false;
+  }
   const pending = new Map();
   let pollTimer = null;
   let pollRound = 0;

@@ -55,6 +55,58 @@ def test_play_preserves_remote_and_local_routes(configured_app):
     assert client.get("/play/404").status_code == 404
 
 
+def test_heresphere_api_exposes_ordered_library_and_direct_sources(configured_app, caplog):
+    client = configured_app.test_client()
+    library = client.post("/heresphere", json={})
+    assert library.status_code == 200
+    assert library.content_type == "application/json"
+    assert "Content-Disposition" not in library.headers
+    assert library.headers["HereSphere-JSON-Version"] == "1"
+    assert library.headers["Cache-Control"] == "no-store"
+    assert library.json["access"] == 1
+    assert library.json["library"][0]["name"] == "Media library"
+    assert library.json["library"][0]["list"] == [
+        "http://localhost/heresphere/video/1",
+        "http://localhost/heresphere/video/2",
+    ]
+    main_page_api = client.post("/", json={})
+    assert main_page_api.json == library.json
+    assert main_page_api.headers["HereSphere-JSON-Version"] == "1"
+
+    caplog.clear()
+    metadata = client.post("/heresphere/video/2", json={"needsMediaSource": False})
+    assert metadata.status_code == 200
+    assert metadata.content_type == "application/json"
+    assert "Content-Disposition" not in metadata.headers
+    assert metadata.headers["HereSphere-JSON-Version"] == "1"
+    assert metadata.json["media"][0]["sources"][0]["url"].endswith("/smb/folder/movie.mp4")
+    assert metadata.json["writeHSP"] is False
+    assert "Clicked video:" not in caplog.text
+
+    with caplog.at_level(logging.INFO):
+        playable = client.post("/heresphere/video/1", json={"needsMediaSource": True})
+    assert playable.json["media"][0]["sources"][0]["url"] == "https://example.test/video"
+    assert "Clicked video: Remote title" in caplog.text
+
+
+def test_main_page_preserves_direct_links_and_excludes_heresphere_controls_from_debrid(configured_app):
+    client = configured_app.test_client()
+    main = client.get("/")
+    assert b"data-shuffle-button" not in main.data
+    assert b"data-heresphere-help" in main.data
+    assert b"data-play-link" in main.data
+    assert b'href="/play/1"' in main.data
+    assert b'href="/heresphere' not in main.data
+
+    debrid = client.get("/debrid")
+    assert b"data-heresphere-help" not in debrid.data
+
+    script = (Path(__file__).resolve().parents[1] / "static" / "js" / "app.js").read_text(encoding="utf-8")
+    assert 'link.setAttribute("download", "")' in script
+    assert "window.location.assign" not in script
+    assert 'searchParams.set("shuffle"' not in script
+
+
 def test_smb_route_streams_encoded_nested_paths_and_logs_clicks(tmp_path: Path, caplog):
     media = tmp_path / "media"
     nested = media / "nested"

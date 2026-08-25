@@ -32,6 +32,16 @@ Only uncached thumbnails near the viewport are queued. Two FFmpeg processes may 
 
 The Real-Debrid cloud page is filtered using selected files from `/torrents/info`, not torrent display names. Only recognized video files with corresponding links are shown. Torrent details are cached in `.cache/real_debrid_details.json` and refreshed only when the list metadata changes; cold cache misses use four bounded metadata workers.
 
+## HereSphere playback and library discovery
+
+The main page supports HereSphere's JSON web API discovery. In HereSphere, open the main page and press the **Web Stream** button in the upper-left. HereSphere POSTs the current page, receives the library index, and then loads the per-video data URLs. `/heresphere` exposes the same JSON index for diagnostics, but it is an API endpoint rather than a page to open directly.
+
+API responses use `Content-Type: application/json` and `HereSphere-JSON-Version: 1`. The index uses HereSphere's `access` and `library` fields; each library entry points to video data containing `thumbnailImage`, `media`, and direct source URLs. This is the HereSphere schema, not the older DeoVR `scenes`/`video_url` schema. Projection and stereo fields are left unset when the playlist has no authoritative metadata so HereSphere can use its filename detection and user settings.
+
+Card links remain direct `/play/<id>` links. When the page is running inside HereSphere, JavaScript marks them as download links so HereSphere sends them to its native player instead of the embedded browser. Normal browsers retain their existing link behavior. The site does not redirect card clicks to JSON and does not implement browser-driven next-video events.
+
+After Web Stream imports the library, HereSphere owns the playback queue, automatic next-video behavior, VR projection, and shuffle. Enable autoplay/continuous playback and Shuffle in HereSphere itself. The website does not use undocumented queue or shuffle URL parameters. `/debrid` is unchanged.
+
 ## Build the Windows executable
 
 Install `requirements-dev.txt`, then run:

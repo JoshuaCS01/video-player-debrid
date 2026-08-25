@@ -7,10 +7,12 @@
     <h1>Media library</h1>
     <p class="subtle"><span id="visibleCount">{{ videos|length }}</span> of {{ videos|length }} titles</p>
   </div>
-  <label class="search">
-    <span class="sr-only">Search titles or performers</span>
-    <input id="search" type="search" placeholder="Search your library…" autocomplete="off" data-media-search>
-  </label>
+  <div class="library-controls">
+    <label class="search">
+      <span class="sr-only">Search titles or performers</span>
+      <input id="search" type="search" placeholder="Search your library…" autocomplete="off" data-media-search>
+    </label>
+  </div>
 </section>
 {% if library_error %}<div class="notice notice-error" role="alert">Could not load the library: {{ library_error }}</div>{% endif %}
 <div id="emptyState" class="empty-state" {% if videos %}hidden{% endif %}>
@@ -22,7 +24,7 @@
          data-thumbnail-status-batch="{{ url_for('thumbnail_status_batch') }}">
   {% for video in videos %}
   <article class="media-card" data-media-item data-search="{{ video.title }} {{ (video.stars or [])|join(' ') }}">
-    <a class="poster" href="{{ url_for('play', item_id=video.id) }}" aria-label="Play {{ video.title }}">
+    <a class="poster" href="{{ url_for('play', item_id=video.id) }}" aria-label="Play {{ video.title }}" data-play-link>
       <img src="{% if video.thumbnail_cached %}{{ url_for('thumbnail', item_id=video.id) }}{% else %}{{ url_for('static', filename='img/placeholder.svg') }}{% endif %}"
            alt="" loading="lazy" data-thumbnail-id="{{ video.id }}"
            data-thumbnail-src="{{ url_for('thumbnail', item_id=video.id) }}"
@@ -30,7 +32,7 @@
       <span class="play-button" aria-hidden="true">▶</span>
     </a>
     <div class="card-body">
-      <h2><a href="{{ url_for('play', item_id=video.id) }}">{{ video.title }}</a></h2>
+      <h2><a href="{{ url_for('play', item_id=video.id) }}" data-play-link>{{ video.title }}</a></h2>
       {% if video.stars %}<p class="metadata">{{ video.stars|join(' · ') }}</p>{% else %}<p class="metadata">Media</p>{% endif %}
     </div>
   </article>

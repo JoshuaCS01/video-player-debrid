@@ -7,7 +7,7 @@ import os
 import stat
 import time
 
-from flask import Flask, abort, flash, redirect, render_template, request, send_file, send_from_directory, url_for
+from flask import Flask, abort, flash, jsonify, redirect, render_template, request, send_file, send_from_directory, url_for
 from werkzeug.security import safe_join
 
 from media_manager.config import AppConfig
@@ -27,8 +27,10 @@ def create_app(config: AppConfig | None = None) -> Flask:
     thumbnails = ThumbnailService(settings.smb_folder, settings.thumbnail_cache_dir, settings.ffmpeg_path)
     app.extensions.update(playlist_store=playlist, debrid_client=debrid_client, thumbnail_service=thumbnails)
 
-    @app.get("/")
+    @app.route("/", methods=["GET", "POST"])
     def home():
+        if request.method == "POST":
+            return heresphere_library()
         started = time.perf_counter()
         try:
             stored_videos, library_error = playlist.all(), None
@@ -49,6 +51,59 @@ def create_app(config: AppConfig | None = None) -> Flask:
             app.logger.warning("Real-Debrid listing failed: %s", exc)
             videos, api_error = [], str(exc)
         return render_template("debrid.html", videos=videos, api_error=api_error)
+
+    def heresphere_response(payload: dict):
+        response = jsonify(payload)
+        response.headers["HereSphere-JSON-Version"] = "1"
+        response.headers["Cache-Control"] = "no-store"
+        return response
+
+    @app.route("/heresphere", methods=["GET", "POST"])
+    @app.route("/heresphere/", methods=["GET", "POST"])
+    def heresphere_library():
+        try:
+            videos = playlist.all()
+        except (OSError, ValueError) as exc:
+            app.logger.exception("Unable to build HereSphere library")
+            abort(503, str(exc))
+        return heresphere_response({
+            "access": 1,
+            "library": [{
+                "name": "Media library",
+                "list": [url_for("heresphere_video", item_id=video["id"], _external=True) for video in videos],
+            }],
+        })
+
+    @app.route("/heresphere/video/<int:item_id>", methods=["GET", "POST"])
+    def heresphere_video(item_id: int):
+        video = playlist.get(item_id)
+        if video is None:
+            abort(404, "Video not found")
+        media_url = str(video.get("url", ""))
+        if thumbnails.is_remote(media_url):
+            source_url = media_url
+        else:
+            filename = thumbnails.local_filename(video)
+            if not filename:
+                abort(404, "Local media filename is invalid")
+            source_url = url_for("smb", filename=filename, _external=True)
+        request_data = request.get_json(silent=True) or {}
+        if request_data.get("needsMediaSource", True):
+            app.logger.info("Clicked video: %s", video.get("title") or f"item {item_id}")
+        tags = [{"name": f"Performer:{name}"} for name in video.get("stars", []) if name]
+        return heresphere_response({
+            "access": 1,
+            "title": video.get("title") or f"Video {item_id}",
+            "description": video.get("title") or "",
+            "thumbnailImage": url_for("thumbnail", item_id=item_id, _external=True),
+            "tags": tags,
+            "media": [{"name": "Direct", "sources": [{"url": source_url}]}],
+            "isFavorite": False,
+            "writeFavorite": False,
+            "writeRating": False,
+            "writeTags": False,
+            "writeHSP": False,
+        })
 
     @app.get("/debrid/group/<int:group_id>")
     def debrid_group(group_id: int):
