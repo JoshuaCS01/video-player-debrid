@@ -1,0 +1,50 @@
+<!doctype html>
+
+<html>
+
+<head>
+    <meta charset="utf-8">
+    <title>VR Library</title>
+</head>
+
+
+<script>
+    function filterVideos() {
+        let input = document.getElementById("search").value.toLowerCase();
+        let items = document.querySelectorAll("#videoList li");
+
+        items.forEach(function (item) {
+            let title = item.querySelector("a").textContent.toLowerCase();
+            let stars = item.dataset.stars.toLowerCase();
+
+            if (title.includes(input) || stars.includes(input)) {
+                item.style.display = "";
+            } else {
+                item.style.display = "none";
+            }
+        });
+    }
+</script>
+
+<body>
+
+    <h1>VR Library</h1>
+    <a href="/debrid"> Go to Debrid</a>
+<hr>
+    <input type="text" id="search" placeholder="Search videos..." onkeyup="filterVideos()">
+
+    <ul id="videoList">
+
+        {% for video in videos %}
+        <li data-stars="{{ ', '.join(video.stars) }}">
+            <a href="/play/{{ video.id }}">
+                {{ video.title }}
+            </a>
+            <br>
+        </li>
+        {% endfor %}
+
+    </ul>
+</body>
+
+</html>

@@ -1,0 +1,39 @@
+<!doctype html>
+
+<html>
+
+<head>
+    <meta charset="utf-8">
+    <title>Debrid</title>
+</head>
+
+
+<body>
+
+    <h1>Debrid</h1>
+    <a href="/"> Go to Home</a>
+
+    <hr>
+
+    <ul id="videoList">
+
+        {% for video in videos %}
+        <div>
+
+            <li data-name="{{video.file}}">
+                <form action="/bookmark/{{ video.id }}" method="post" style="display:inline; margin-right: 10px;">
+                    <button type="submit">⭐</button>
+                </form>
+
+                <a href="/debrid/play/{{ video.id }}">
+                    {{ video.filename }}
+                </a>
+                <br>
+            </li>
+        </div>
+        {% endfor %}
+
+    </ul>
+</body>
+
+</html>
