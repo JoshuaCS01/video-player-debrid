@@ -128,6 +128,7 @@ def test_main_page_preserves_direct_links_and_excludes_heresphere_controls_from_
     css = (Path(__file__).resolve().parents[1] / "static" / "css" / "app.css").read_text(encoding="utf-8")
     assert "margin-left: auto" in css and "justify-content: flex-end" in css
     assert ".search {" in css and "position: relative" in css
+    assert ".library-page-controls .search { flex-basis: auto; }" in css
 
 
 def test_remove_favorite_requires_confirm_markup_and_persists_without_deleting_media(configured_app):
