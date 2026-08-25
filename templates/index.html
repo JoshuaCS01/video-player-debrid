@@ -1,50 +1,39 @@
-<!doctype html>
-
-<html>
-
-<head>
-    <meta charset="utf-8">
-    <title>VR Library</title>
-</head>
-
-
-<script>
-    function filterVideos() {
-        let input = document.getElementById("search").value.toLowerCase();
-        let items = document.querySelectorAll("#videoList li");
-
-        items.forEach(function (item) {
-            let title = item.querySelector("a").textContent.toLowerCase();
-            let stars = item.dataset.stars.toLowerCase();
-
-            if (title.includes(input) || stars.includes(input)) {
-                item.style.display = "";
-            } else {
-                item.style.display = "none";
-            }
-        });
-    }
-</script>
-
-<body>
-
-    <h1>VR Library</h1>
-    <a href="/debrid"> Go to Debrid</a>
-<hr>
-    <input type="text" id="search" placeholder="Search videos..." onkeyup="filterVideos()">
-
-    <ul id="videoList">
-
-        {% for video in videos %}
-        <li data-stars="{{ ', '.join(video.stars) }}">
-            <a href="/play/{{ video.id }}">
-                {{ video.title }}
-            </a>
-            <br>
-        </li>
-        {% endfor %}
-
-    </ul>
-</body>
-
-</html>
+{% extends "base.html" %}
+{% block title %}Library · Home Media{% endblock %}
+{% block content %}
+<section class="hero">
+  <div>
+    <p class="eyebrow">Your collection</p>
+    <h1>Media library</h1>
+    <p class="subtle"><span id="visibleCount">{{ videos|length }}</span> of {{ videos|length }} titles</p>
+  </div>
+  <label class="search">
+    <span class="sr-only">Search titles or performers</span>
+    <input id="search" type="search" placeholder="Search your library…" autocomplete="off" data-media-search>
+  </label>
+</section>
+{% if library_error %}<div class="notice notice-error" role="alert">Could not load the library: {{ library_error }}</div>{% endif %}
+<div id="emptyState" class="empty-state" {% if videos %}hidden{% endif %}>
+  <div class="empty-icon" aria-hidden="true">⌕</div>
+  <h2>{% if videos %}No matches found{% else %}Your library is empty{% endif %}</h2>
+  <p>{% if videos %}Try a different title or performer.{% else %}Add a title from Real-Debrid to get started.{% endif %}</p>
+</div>
+<section id="videoList" class="media-grid" aria-live="polite"
+         data-thumbnail-status-batch="{{ url_for('thumbnail_status_batch') }}">
+  {% for video in videos %}
+  <article class="media-card" data-media-item data-search="{{ video.title }} {{ (video.stars or [])|join(' ') }}">
+    <a class="poster" href="{{ url_for('play', item_id=video.id) }}" aria-label="Play {{ video.title }}">
+      <img src="{% if video.thumbnail_cached %}{{ url_for('thumbnail', item_id=video.id) }}{% else %}{{ url_for('static', filename='img/placeholder.svg') }}{% endif %}"
+           alt="" loading="lazy" data-thumbnail-id="{{ video.id }}"
+           data-thumbnail-src="{{ url_for('thumbnail', item_id=video.id) }}"
+           data-thumbnail-cached="{{ 'true' if video.thumbnail_cached else 'false' }}">
+      <span class="play-button" aria-hidden="true">▶</span>
+    </a>
+    <div class="card-body">
+      <h2><a href="{{ url_for('play', item_id=video.id) }}">{{ video.title }}</a></h2>
+      {% if video.stars %}<p class="metadata">{{ video.stars|join(' · ') }}</p>{% else %}<p class="metadata">Media</p>{% endif %}
+    </div>
+  </article>
+  {% endfor %}
+</section>
+{% endblock %}

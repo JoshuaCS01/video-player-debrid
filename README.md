@@ -1,85 +1,49 @@
 # Home Media Manager
 
-A lightweight Flask application for managing and launching media from multiple sources through a single web interface.
+A small Windows desktop host and responsive Flask client for a local/Real-Debrid media library.
 
-The application currently supports media stored in a local/network SMB share as well as media available through Real-Debrid. It provides a browser-based interface for viewing media, launching playback, browsing available Real-Debrid torrents, and bookmarking items for later access.
+## Run from source
 
-## Features
+1. Create a virtual environment and install `requirements.txt`.
+2. Keep `.env` and `playlist.json` beside `desktop.py`.
+3. Run `python desktop.py`, then choose **Start server**.
 
-* Browse a saved media playlist through a web interface
-* Retrieve available torrents from the Real-Debrid API
-* Generate unrestricted Real-Debrid playback links
-* Bookmark Real-Debrid items to a local JSON playlist
-* Launch bookmarked Real-Debrid media
-* Access media stored on an SMB/network share
-* Serve local network media through Flask
-* Store basic media metadata such as titles and associated stars
+The desktop window shows the LAN address to open on phones, tablets, laptops, or TVs. `python app.py` remains available as a server-only entry point.
 
-## Tech Stack
+Supported `.env` settings:
 
-* Python
-* Flask
-* HTML
-* JSON
-* Requests
-* Real-Debrid REST API
-* SMB/network storage
+- `REAL_DEBRID_TOKEN` and `REAL_DEBRID_CUSTOM_ID`
+- `SMB_FOLDER` (for example a mapped folder or UNC share)
+- `PORT` (defaults to `8080`) and `HOST` (defaults to `0.0.0.0`)
+- `FFMPEG_PATH` (optional explicit path to FFmpeg)
+- `SECRET_KEY` (optional persistent Flask session key)
 
-## Running the Application
+`HOME_URL` is still accepted for compatibility but is no longer required; local entries are recognized by their non-HTTP URLs.
 
-Install the required Python packages:
+## Thumbnails
 
-```bash
-pip install flask requests
+For local/SMB videos, the app first looks for a `.jpg`, `.jpeg`, `.png`, or `.webp` beside the video with the same base filename. If FFmpeg is available, it captures a frame at 10 seconds and caches it under `.cache/thumbnails`. Set `FFMPEG_PATH`, put FFmpeg on `PATH`, or place `ffmpeg.exe` in `bin/` before packaging.
+
+Missing thumbnails are queued automatically in two background workers. The placeholder is not cached by the browser, and the page replaces it when generation finishes. Failures and successful cache writes appear in the desktop activity log; temporary network/resource failures use a short backoff while likely-invalid media waits longer before retrying.
+
+Real-Debrid playlist URLs are passed to FFmpeg with a 15-second network-read limit and a 35-second total process limit. FFmpeg uses HTTP range seeking when the endpoint supports it and stops after extracting one frame, so it does not intentionally download a complete remote video. If the endpoint is expired, inaccessible, or not seekable within the limits, the placeholder remains and the activity log reports why.
+
+Only uncached thumbnails near the viewport are queued. Two FFmpeg processes may run at once, and each process is limited to one decode, filter, and encode thread. Visible pending items use one adaptive batch-status request instead of one polling timer per card. Successful cache files retain stable names and are indexed when the host starts, so refreshes, other clients, and application restarts reuse them directly.
+
+The Real-Debrid cloud page is filtered using selected files from `/torrents/info`, not torrent display names. Only recognized video files with corresponding links are shown. Torrent details are cached in `.cache/real_debrid_details.json` and refreshed only when the list metadata changes; cold cache misses use four bounded metadata workers.
+
+## Build the Windows executable
+
+Install `requirements-dev.txt`, then run:
+
+```powershell
+pyinstaller --clean HomeMediaManager.spec
 ```
 
-Then run:
+Copy `.env` and `playlist.json` beside the resulting executable. The build has no console window and bundles templates/static assets. If `bin/ffmpeg.exe` exists at build time, the spec includes it automatically. Review FFmpeg licensing and distribution terms before shipping it.
 
-```bash
-python app.py
+## Test
+
+```powershell
+pytest -q
 ```
-
-The Flask server runs on:
-
-```text
-http://localhost:8080
-```
-
-Because the application binds to `0.0.0.0`, it can also be accessed by other devices on the local network using the host computer's local IP address.
-
-## Configuration
-
-The application requires configuration for:
-
-* Real-Debrid API credentials
-* Real-Debrid URLs
-* SMB/network media location
-
-API credentials should not be committed to source control. Use environment variables or another local configuration mechanism when sharing or publishing the project.
-
-Example:
-
-```python
-import os
-
-REAL_DEBRID_TOKEN = os.environ.get("REAL_DEBRID_TOKEN")
-```
-
-## Current Limitations
-
-This is a personal project under active development.
-
-The current implementation intentionally remains relatively lightweight and has several areas that could be improved, including:
-
-* Configuration management
-* Error handling
-* Media metadata management
-* Duplicate detection
-* Network path handling
-* Separation of application and API logic
-* Automated testing
-* User-facing error messages
-
-## Purpose
-
-The project was created as a personal media-management tool for accessing media available from different sources through one interface. It also serves as an experimental project for working with Flask, REST APIs, network storage, JSON-based persistence, and media playback workflows.

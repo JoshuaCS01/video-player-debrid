@@ -1,0 +1,30 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#090b12">
+  <title>{% block title %}Home Media Manager{% endblock %}</title>
+  <link rel="stylesheet" href="{{ url_for('static', filename='css/app.css') }}">
+  <script src="{{ url_for('static', filename='js/app.js') }}" defer></script>
+</head>
+<body>
+  <a class="skip-link" href="#content">Skip to content</a>
+  <header class="site-header">
+    <a class="brand" href="{{ url_for('home') }}" aria-label="Home Media Manager home">
+      <span class="brand-mark" aria-hidden="true">▶</span>
+      <span>Home Media</span>
+    </a>
+    <nav aria-label="Main navigation">
+      <a href="{{ url_for('home') }}" {% if request.endpoint == 'home' %}aria-current="page"{% endif %}>Library</a>
+      <a href="{{ url_for('debrid') }}" {% if request.endpoint == 'debrid' %}aria-current="page"{% endif %}>Real-Debrid</a>
+    </nav>
+  </header>
+  <main id="content" class="page-shell">
+    {% with messages = get_flashed_messages(with_categories=true) %}
+      {% for category, message in messages %}<div class="notice notice-{{ category }}" role="status">{{ message }}</div>{% endfor %}
+    {% endwith %}
+    {% block content %}{% endblock %}
+  </main>
+</body>
+</html>

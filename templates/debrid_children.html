@@ -1,0 +1,10 @@
+{% for video in group.videos %}
+<div class="torrent-row torrent-child-row">
+  <a class="torrent-title" href="{{ url_for('debrid_play', item_id=video.id) }}">
+    <span class="file-icon" aria-hidden="true">▶</span><span>{{ video.filename }}</span>
+  </a>
+  <form action="{{ url_for('bookmark', item_id=video.id) }}" method="post">
+    <button class="button-secondary" type="submit" title="Add to library">☆ <span>Save</span></button>
+  </form>
+</div>
+{% endfor %}

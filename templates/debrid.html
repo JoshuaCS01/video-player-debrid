@@ -1,39 +1,34 @@
-<!doctype html>
-
-<html>
-
-<head>
-    <meta charset="utf-8">
-    <title>Debrid</title>
-</head>
-
-
-<body>
-
-    <h1>Debrid</h1>
-    <a href="/"> Go to Home</a>
-
-    <hr>
-
-    <ul id="videoList">
-
-        {% for video in videos %}
-        <div>
-
-            <li data-name="{{video.file}}">
-                <form action="/bookmark/{{ video.id }}" method="post" style="display:inline; margin-right: 10px;">
-                    <button type="submit">⭐</button>
-                </form>
-
-                <a href="/debrid/play/{{ video.id }}">
-                    {{ video.filename }}
-                </a>
-                <br>
-            </li>
-        </div>
-        {% endfor %}
-
-    </ul>
-</body>
-
-</html>
+{% extends "base.html" %}
+{% block title %}Real-Debrid · Home Media{% endblock %}
+{% block content %}
+<section class="hero">
+  <div><p class="eyebrow">Cloud library</p><h1>Real-Debrid</h1><p class="subtle">Browse available torrents and save favorites.</p></div>
+  <label class="search"><span class="sr-only">Search Real-Debrid</span><input type="search" placeholder="Search torrents…" data-media-search></label>
+</section>
+{% if api_error %}<div class="notice notice-error" role="alert">{{ api_error }}</div>{% endif %}
+<div id="emptyState" class="empty-state" {% if videos %}hidden{% endif %}><div class="empty-icon" aria-hidden="true">☁</div><h2>{% if api_error %}Real-Debrid is unavailable{% else %}No torrents found{% endif %}</h2><p>Check the host application for configuration or connection details.</p></div>
+<section id="videoList" class="list-panel" aria-live="polite">
+  {% for video in videos %}
+    {% if video.kind == "group" %}
+    <article class="torrent-group" data-media-item data-search="{{ video.search_text }}">
+      <button class="torrent-group-toggle" type="button" aria-expanded="false"
+              aria-controls="torrent-group-{{ video.id }}"
+              data-group-url="{{ url_for('debrid_group', group_id=video.id) }}">
+        <span class="file-icon group-icon" aria-hidden="true">▤</span>
+        <span class="torrent-group-copy">
+          <strong>{{ video.filename }}</strong>
+          <span>{{ video.video_count }} videos</span>
+        </span>
+        <span class="group-chevron" aria-hidden="true">⌄</span>
+      </button>
+      <div id="torrent-group-{{ video.id }}" class="torrent-children" hidden aria-live="polite"></div>
+    </article>
+    {% else %}
+    <article class="torrent-row" data-media-item data-search="{{ video.filename }}">
+      <a class="torrent-title" href="{{ url_for('debrid_play', item_id=video.id) }}"><span class="file-icon" aria-hidden="true">▶</span><span>{{ video.filename }}</span></a>
+      <form action="{{ url_for('bookmark', item_id=video.id) }}" method="post"><button class="button-secondary" type="submit" title="Add to library">☆ <span>Save</span></button></form>
+    </article>
+    {% endif %}
+  {% endfor %}
+</section>
+{% endblock %}
