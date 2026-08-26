@@ -10,7 +10,7 @@ from tkinter import messagebox, ttk
 
 from app import create_app
 from media_manager.config import AppConfig
-from media_manager.server import ServerController, lan_address
+from media_manager.server import HereSphereServerGroup, lan_address
 
 
 class QueueLogHandler(logging.Handler):
@@ -27,15 +27,29 @@ class DesktopApp:
         self.root = root
         self.settings = AppConfig.load()
         self.messages: queue.Queue[str] = queue.Queue()
+        client_host = lan_address()
         self.local_url = f"http://127.0.0.1:{self.settings.port}"
-        self.client_url = f"http://{lan_address()}:{self.settings.port}"
-        self.server = ServerController(create_app(self.settings), self.settings.host, self.settings.port, self._server_error)
+        self.client_url = f"http://{client_host}:{self.settings.port}"
+        self.library_client_url = f"http://{client_host}:{self.settings.library_port}/library"
+        shared_app = create_app(self.settings)
+        self.server = HereSphereServerGroup(
+            shared_app,
+            self.settings.host,
+            self.settings.port,
+            self.settings.library_port,
+            self._server_error,
+        )
+        self.favorites_server = self.server.favorites
+        self.library_server = self.server.library
+        self._closing = False
+        self._closed = False
         self.status = tk.StringVar(value="Stopped")
         self.status_detail = tk.StringVar(value="The media server is not running.")
         self._build()
         self._configure_logging()
         self.root.protocol("WM_DELETE_WINDOW", self.close)
         self.root.after(150, self._drain_logs)
+        self.root.after_idle(self.start)
 
     def _build(self) -> None:
         self.root.title("Home Media Manager")
@@ -90,19 +104,28 @@ class DesktopApp:
         logging.info("Ready. Client devices will use %s", self.client_url)
 
     def start(self) -> None:
+        if self._closing or self._closed:
+            return
         try:
             self.server.start()
-        except OSError as exc:
-            self._server_error(exc)
+        except Exception:
+            self.status.set("Stopped")
+            self.status_detail.set("The media server could not be started.")
+            self.start_button.configure(state="normal")
+            self.stop_button.configure(state="disabled")
             return
         self.status.set("Running")
-        self.status_detail.set(f"Available to this PC and your local network on port {self.settings.port}.")
+        self.status_detail.set(
+            f"Favorites on port {self.settings.port}; Library Web Stream on port {self.settings.library_port}."
+        )
         self.start_button.configure(state="disabled")
         self.stop_button.configure(state="normal")
-        logging.info("Media server started at %s", self.client_url)
+        logging.info("Media server started at %s; Library Web Stream at %s", self.client_url, self.library_client_url)
 
     def stop(self) -> None:
         self.server.stop()
+        if self._closed:
+            return
         self.status.set("Stopped")
         self.status_detail.set("The media server is not running.")
         self.start_button.configure(state="normal")
@@ -116,9 +139,12 @@ class DesktopApp:
 
     def _server_error(self, error: Exception) -> None:
         logging.error("Server error: %s", error)
-        self.root.after(0, lambda: messagebox.showerror("Server error", str(error), parent=self.root))
+        if not self._closing and not self._closed:
+            self.root.after(0, lambda: messagebox.showerror("Server error", str(error), parent=self.root))
 
     def _drain_logs(self) -> None:
+        if self._closing or self._closed:
+            return
         lines = []
         while True:
             try:
@@ -133,14 +159,30 @@ class DesktopApp:
         self.root.after(150, self._drain_logs)
 
     def close(self) -> None:
-        self.server.stop()
+        if self._closing or self._closed:
+            return
+        self._closing = True
+        try:
+            self.server.stop()
+        except Exception as exc:
+            self._closing = False
+            logging.exception("Unable to stop all media listeners")
+            messagebox.showerror("Shutdown error", str(exc), parent=self.root)
+            return
+        self._closed = True
+        self.root.quit()
         self.root.destroy()
 
 
 def main() -> None:
     root = tk.Tk()
-    DesktopApp(root)
-    root.mainloop()
+    desktop = DesktopApp(root)
+    try:
+        root.mainloop()
+    except KeyboardInterrupt:
+        logging.info("Ctrl+C received; stopping media listeners")
+    finally:
+        desktop.close()
 
 
 if __name__ == "__main__":

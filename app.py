@@ -5,7 +5,9 @@ from __future__ import annotations
 import logging
 import os
 import stat
+import threading
 import time
+from urllib.parse import urlsplit, urlunsplit
 
 from flask import Flask, abort, flash, jsonify, redirect, render_template, request, send_file, send_from_directory, url_for
 from werkzeug.security import safe_join
@@ -13,6 +15,12 @@ from werkzeug.security import safe_join
 from media_manager.config import AppConfig
 from media_manager.debrid import DebridError, RealDebridClient
 from media_manager.pls_library import PLSLibrary
+from media_manager.server import (
+    FAVORITES_COLLECTION,
+    HERESPHERE_COLLECTION_ENV,
+    LIBRARY_COLLECTION,
+    HereSphereServerGroup,
+)
 from media_manager.storage import PlaylistStore
 from media_manager.thumbnails import ThumbnailService
 
@@ -32,10 +40,55 @@ def create_app(config: AppConfig | None = None) -> Flask:
         debrid_client=debrid_client, thumbnail_service=thumbnails,
     )
 
+    discovery_paths = {
+        "/", "/library", "/library/", "/heresphere", "/heresphere/",
+        "/library/heresphere", "/library/heresphere/",
+    }
+
+    @app.before_request
+    def log_heresphere_discovery_request():
+        if request.path in discovery_paths:
+            app.logger.info(
+                "HereSphere discovery request: method=%s path=%s user_agent=%s",
+                request.method,
+                request.path,
+                request.user_agent.string or "-",
+            )
+
+    def listener_collection() -> str | None:
+        return request.environ.get(HERESPHERE_COLLECTION_ENV)
+
+    def origin_url(port: int, path: str) -> str:
+        current = urlsplit(request.host_url)
+        hostname = current.hostname or "127.0.0.1"
+        rendered_host = f"[{hostname}]" if ":" in hostname else hostname
+        netloc = f"{rendered_host}:{port}"
+        return urlunsplit((current.scheme, netloc, path, "", ""))
+
+    @app.context_processor
+    def listener_navigation_urls():
+        collection = listener_collection()
+        return {
+            "favorites_site_url": (
+                origin_url(settings.port, url_for("home"))
+                if collection == LIBRARY_COLLECTION else url_for("home")
+            ),
+            "library_site_url": (
+                origin_url(settings.library_port, url_for("library_page"))
+                if collection == FAVORITES_COLLECTION else url_for("library_page")
+            ),
+            "debrid_site_url": (
+                origin_url(settings.port, url_for("debrid"))
+                if collection == LIBRARY_COLLECTION else url_for("debrid")
+            ),
+        }
+
     @app.route("/", methods=["GET", "POST"])
     def home():
         if request.method == "POST":
             return heresphere_library()
+        if listener_collection() == LIBRARY_COLLECTION:
+            return redirect(url_for("library_page"))
         started = time.perf_counter()
         try:
             stored_videos, library_error = playlist.all(), None
@@ -48,10 +101,10 @@ def create_app(config: AppConfig | None = None) -> Flask:
         app.logger.info("Favorites response: %d items, %d cached thumbnails, %.1f ms", len(videos), sum(video.get("thumbnail_cached", False) for video in videos), elapsed_ms)
         return response
 
-    @app.route("/library", methods=["GET", "POST"])
+    @app.get("/library")
     def library_page():
-        if request.method == "POST":
-            return library_heresphere()
+        if listener_collection() == FAVORITES_COLLECTION:
+            return redirect(origin_url(settings.library_port, url_for("library_page")))
         started = time.perf_counter()
         try:
             stored_videos, library_error = full_library.all(), None
@@ -82,11 +135,14 @@ def create_app(config: AppConfig | None = None) -> Flask:
     @app.route("/heresphere", methods=["GET", "POST"])
     @app.route("/heresphere/", methods=["GET", "POST"])
     def heresphere_library():
+        if listener_collection() == LIBRARY_COLLECTION:
+            return library_heresphere()
         try:
             videos = playlist.all()
         except (OSError, ValueError) as exc:
             app.logger.exception("Unable to build HereSphere library")
             abort(503, str(exc))
+        app.logger.info("HereSphere collection: Favorites")
         return heresphere_response({
             "access": 1,
             "library": [{
@@ -103,6 +159,7 @@ def create_app(config: AppConfig | None = None) -> Flask:
         except (OSError, ValueError) as exc:
             app.logger.exception("Unable to build HereSphere Library from fullNew.pls")
             abort(503, str(exc))
+        app.logger.info("HereSphere collection: Library")
         return heresphere_response({
             "access": 1,
             "library": [{
@@ -407,4 +464,13 @@ def create_app(config: AppConfig | None = None) -> Flask:
 if __name__ == "__main__":
     logging.basicConfig(level=logging.INFO)
     settings = AppConfig.load()
-    create_app(settings).run(host=settings.host, port=settings.port, threaded=True)
+    servers = HereSphereServerGroup(
+        create_app(settings), settings.host, settings.port, settings.library_port,
+    )
+    servers.start()
+    try:
+        threading.Event().wait()
+    except KeyboardInterrupt:
+        pass
+    finally:
+        servers.stop()

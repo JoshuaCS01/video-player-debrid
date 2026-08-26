@@ -29,10 +29,12 @@ htmlcov/
 .venv/
 venv/
 env/
-build/
-dist/
 .vscode/
 .idea/
 Thumbs.db
 Desktop.ini
 .DS_Store
+build/
+dist/
+*.spec
+!HomeMediaManager.spec

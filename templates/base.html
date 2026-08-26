@@ -11,14 +11,14 @@
 <body>
   <a class="skip-link" href="#content">Skip to content</a>
   <header class="site-header">
-    <a class="brand" href="{{ url_for('home') }}" aria-label="Home Media Manager home">
+    <a class="brand" href="{{ favorites_site_url }}" aria-label="Home Media Manager home">
       <span class="brand-mark" aria-hidden="true">▶</span>
       <span>Home Media</span>
     </a>
     <nav aria-label="Main navigation">
-      <a href="{{ url_for('home') }}" {% if request.endpoint == 'home' %}aria-current="page"{% endif %}>Favorites</a>
-      <a href="{{ url_for('library_page') }}" {% if request.endpoint and request.endpoint.startswith('library_') %}aria-current="page"{% endif %}>Library</a>
-      <a href="{{ url_for('debrid') }}" {% if request.endpoint == 'debrid' %}aria-current="page"{% endif %}>Real-Debrid</a>
+      <a href="{{ favorites_site_url }}" {% if request.endpoint == 'home' %}aria-current="page"{% endif %}>Favorites</a>
+      <a href="{{ library_site_url }}" {% if request.endpoint and request.endpoint.startswith('library_') %}aria-current="page"{% endif %}>Library</a>
+      <a href="{{ debrid_site_url }}" {% if request.endpoint == 'debrid' %}aria-current="page"{% endif %}>Real-Debrid</a>
     </nav>
   </header>
   <main id="content" class="page-shell">

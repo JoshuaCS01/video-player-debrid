@@ -34,6 +34,7 @@ class AppConfig:
     library_playlist_path: Path | None = None
     host: str = "0.0.0.0"
     port: int = 8080
+    library_port: int = 8081
     secret_key: str = ""
 
     @classmethod
@@ -53,6 +54,15 @@ class AppConfig:
             raise ValueError("PORT must be a number") from exc
         if not 1 <= port <= 65535:
             raise ValueError("PORT must be between 1 and 65535")
+        default_library_port = port + 1 if port < 65535 else 8081
+        try:
+            library_port = int(os.getenv("LIBRARY_PORT", str(default_library_port)))
+        except ValueError as exc:
+            raise ValueError("LIBRARY_PORT must be a number") from exc
+        if not 1 <= library_port <= 65535:
+            raise ValueError("LIBRARY_PORT must be between 1 and 65535")
+        if library_port == port:
+            raise ValueError("LIBRARY_PORT must be different from PORT")
         return cls(
             resource_dir=resources, data_dir=data, playlist_path=data / "playlist.json",
             thumbnail_cache_dir=data / ".cache" / "thumbnails",
@@ -61,7 +71,7 @@ class AppConfig:
             smb_folder=Path(smb_value) if smb_value else None, home_url=os.getenv("HOME_URL") or None,
             ffmpeg_path=ffmpeg, debrid_details_cache_path=data / ".cache" / "real_debrid_details.json",
             library_playlist_path=Path(library_playlist_value) if library_playlist_value else data / "fullNew.pls",
-            host=os.getenv("HOST", "0.0.0.0"), port=port,
+            host=os.getenv("HOST", "0.0.0.0"), port=port, library_port=library_port,
             secret_key=os.getenv("SECRET_KEY") or secrets.token_hex(24),
         )
 

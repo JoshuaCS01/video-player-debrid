@@ -2,19 +2,30 @@ from __future__ import annotations
 
 import json
 import logging
+import socket
 import shutil
 import subprocess
 import time
+import urllib.request
 from dataclasses import replace
 from pathlib import Path
 from unittest.mock import Mock
 
 import pytest
+from werkzeug.test import Client
+from werkzeug.wrappers import Response
 
 from app import create_app
 from media_manager.config import AppConfig
 from media_manager.debrid import DebridError, RealDebridClient
 from media_manager.pls_library import PLSLibrary
+from media_manager.server import (
+    FAVORITES_COLLECTION,
+    LIBRARY_COLLECTION,
+    HereSphereServerGroup,
+    ListenerApplication,
+    ServerController,
+)
 from media_manager.storage import PlaylistStore
 from media_manager.thumbnails import ThumbnailService
 
@@ -107,6 +118,158 @@ def test_heresphere_api_exposes_ordered_library_and_direct_sources(configured_ap
     assert "Clicked video: Remote title" in caplog.text
 
 
+def test_heresphere_discovery_logging_identifies_request_and_collection(configured_app, caplog):
+    client = configured_app.test_client()
+    headers = {"User-Agent": "HereSphere Quest Test"}
+
+    with caplog.at_level(logging.INFO):
+        client.get("/", headers=headers)
+        client.post("/heresphere", json={"private": "must-not-appear"}, headers=headers)
+        client.get("/library", headers=headers)
+        client.post("/library/heresphere", json={"private": "must-not-appear"}, headers=headers)
+
+    assert "HereSphere discovery request: method=POST path=/heresphere user_agent=HereSphere Quest Test" in caplog.text
+    assert "HereSphere collection: Favorites" in caplog.text
+    assert "HereSphere discovery request: method=GET path=/library user_agent=HereSphere Quest Test" in caplog.text
+    assert "HereSphere discovery request: method=POST path=/library/heresphere user_agent=HereSphere Quest Test" in caplog.text
+    assert "HereSphere collection: Library" in caplog.text
+    assert "must-not-appear" not in caplog.text
+
+
+def test_listener_origins_keep_heresphere_collections_separate(configured_app):
+    favorites_wsgi = ListenerApplication(configured_app, FAVORITES_COLLECTION)
+    library_wsgi = ListenerApplication(configured_app, LIBRARY_COLLECTION)
+    favorites_client = Client(favorites_wsgi, Response)
+    library_client = Client(library_wsgi, Response)
+
+    favorites = favorites_client.post("/heresphere", json={}, base_url="http://localhost:8080")
+    library = library_client.post("/heresphere", json={}, base_url="http://localhost:8081")
+
+    assert favorites.status_code == 200
+    assert favorites.json["library"][0]["name"] == "Favorites"
+    assert favorites.json["library"][0]["list"] == [
+        "http://localhost:8080/heresphere/video/1",
+        "http://localhost:8080/heresphere/video/2",
+    ]
+    assert library.status_code == 200
+    assert library.json["library"][0]["name"] == "Library"
+    assert library.json["library"][0]["list"] == [
+        f"http://localhost:8081/library/heresphere/video/{item_id}" for item_id in (1, 2, 3, 4)
+    ]
+    assert set(favorites.json["library"][0]["list"]).isdisjoint(library.json["library"][0]["list"])
+    assert favorites_client.post(
+        "/heresphere", json={}, base_url="http://localhost:8081"
+    ).json["library"][0]["name"] == "Favorites"
+    assert library_client.post(
+        "/heresphere", json={}, base_url="http://localhost:8080"
+    ).json["library"][0]["name"] == "Library"
+
+    metadata = library_client.post(
+        "/library/heresphere/video/1",
+        json={"needsMediaSource": False},
+        base_url="http://localhost:8081",
+    )
+    assert metadata.status_code == 200
+    assert metadata.json["media"][0]["sources"][0]["url"] == "http://localhost:8081/library/stream/1"
+    media = library_client.get(
+        "/library/stream/1",
+        headers={"Range": "bytes=0-4"},
+        base_url="http://localhost:8081",
+    )
+    assert media.status_code == 206 and media.data == b"first"
+
+    assert favorites_client.get("/", base_url="http://localhost:8080").status_code == 200
+    library_redirect = favorites_client.get("/library", base_url="http://localhost:8080")
+    assert library_redirect.status_code == 302
+    assert library_redirect.headers["Location"] == "http://localhost:8081/library"
+    assert library_client.get("/", base_url="http://localhost:8081").headers["Location"] == "/library"
+    library_page = library_client.get("/library", base_url="http://localhost:8081")
+    assert library_page.status_code == 200
+    assert b"<h1>Library</h1>" in library_page.data
+    assert b'href="http://localhost:8080/"' in library_page.data
+    assert b'href="/library"' in library_page.data
+
+    servers = HereSphereServerGroup(configured_app, "127.0.0.1", 8080, 8081)
+    assert servers.application is configured_app
+    assert servers.favorites.application is configured_app
+    assert servers.library.application is configured_app
+    assert servers.favorites.app.collection == FAVORITES_COLLECTION
+    assert servers.library.app.collection == LIBRARY_COLLECTION
+
+
+def test_two_origin_ports_have_safe_defaults_and_must_differ(tmp_path: Path, monkeypatch):
+    for name in ("PORT", "LIBRARY_PORT"):
+        monkeypatch.delenv(name, raising=False)
+    settings = AppConfig.load(tmp_path)
+    assert settings.port == 8080
+    assert settings.library_port == 8081
+
+    monkeypatch.setenv("PORT", "9000")
+    monkeypatch.setenv("LIBRARY_PORT", "9000")
+    with pytest.raises(ValueError, match="must be different"):
+        AppConfig.load(tmp_path)
+
+
+def test_listener_shutdown_is_joined_and_idempotent(configured_app):
+    controller = ServerController(configured_app, "127.0.0.1", 8080)
+    fake_server = Mock()
+    fake_thread = Mock()
+    fake_thread.is_alive.side_effect = [True, False]
+    controller._server = fake_server
+    controller._thread = fake_thread
+
+    controller.stop()
+    controller.stop()
+
+    fake_server.shutdown.assert_called_once_with()
+    fake_server.server_close.assert_called_once_with()
+    fake_thread.join.assert_called_once_with(timeout=5)
+    assert controller._server is None
+    assert controller._thread is None
+
+
+def test_server_group_always_stops_both_listeners(configured_app):
+    servers = HereSphereServerGroup(configured_app, "127.0.0.1", 8080, 8081)
+    servers.library.stop = Mock(side_effect=RuntimeError("library stop failed"))
+    servers.favorites.stop = Mock()
+
+    with pytest.raises(RuntimeError, match="library stop failed"):
+        servers.stop()
+
+    servers.library.stop.assert_called_once_with()
+    servers.favorites.stop.assert_called_once_with()
+
+
+def test_real_listeners_start_serve_and_release_both_ports(configured_app):
+    servers = HereSphereServerGroup(configured_app, "127.0.0.1", 8080, 8081)
+
+    def post_json(url: str) -> dict:
+        request = urllib.request.Request(
+            url, data=b"{}", headers={"Content-Type": "application/json"}, method="POST",
+        )
+        with urllib.request.urlopen(request, timeout=5) as response:
+            return json.loads(response.read())
+
+    for _cycle in range(2):
+        try:
+            servers.start()
+            favorites = post_json("http://127.0.0.1:8080/heresphere")
+            library = post_json("http://127.0.0.1:8081/heresphere")
+            assert favorites["library"][0]["name"] == "Favorites"
+            assert library["library"][0]["name"] == "Library"
+            assert servers.running
+        finally:
+            servers.stop()
+            servers.stop()
+
+        assert not servers.favorites.running
+        assert not servers.library.running
+        for port in (8080, 8081):
+            with socket.socket() as probe:
+                probe.settimeout(1)
+                assert probe.connect_ex(("127.0.0.1", port)) != 0
+
+
 def test_main_page_preserves_direct_links_and_excludes_heresphere_controls_from_debrid(configured_app):
     client = configured_app.test_client()
     main = client.get("/")
@@ -181,7 +344,7 @@ def test_library_page_playback_and_heresphere_discovery(configured_app, caplog):
     assert ranged.status_code == 206 and ranged.data == b"first"
     assert client.get("/library/stream/4").status_code == 404
 
-    api = client.post("/library", json={})
+    api = client.post("/library/heresphere", json={})
     assert api.status_code == 200
     assert api.headers["HereSphere-JSON-Version"] == "1"
     assert api.json["library"][0]["name"] == "Library"
@@ -190,6 +353,10 @@ def test_library_page_playback_and_heresphere_discovery(configured_app, caplog):
     ]
     video = client.post("/library/heresphere/video/2", json={"needsMediaSource": False})
     assert video.json["media"][0]["sources"][0]["url"] == "http://localhost/library/stream/2"
+    favorites_api = client.post("/heresphere", json={})
+    assert favorites_api.json["library"][0]["name"] == "Favorites"
+    assert all("/library/heresphere/video/" not in url for url in favorites_api.json["library"][0]["list"])
+    assert all("/library/heresphere/video/" in url for url in api.json["library"][0]["list"])
     assert b"data-heresphere-help" not in client.get("/debrid").data
 
 

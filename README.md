@@ -14,7 +14,7 @@ Supported `.env` settings:
 
 - `REAL_DEBRID_TOKEN` and `REAL_DEBRID_CUSTOM_ID`
 - `SMB_FOLDER` (for example a mapped folder or UNC share)
-- `PORT` (defaults to `8080`) and `HOST` (defaults to `0.0.0.0`)
+- `PORT` (Favorites, defaults to `8080`), `LIBRARY_PORT` (defaults to `8081`), and `HOST` (defaults to `0.0.0.0`)
 - `FFMPEG_PATH` (optional explicit path to FFmpeg)
 - `SECRET_KEY` (optional persistent Flask session key)
 
@@ -42,13 +42,13 @@ Local Library playback uses opaque `/library/stream/<id>` URLs that resolve only
 
 ## HereSphere playback and library discovery
 
-The main page supports HereSphere's JSON web API discovery. In HereSphere, open the main page and press the **Web Stream** button in the upper-left. HereSphere POSTs the current page, receives the library index, and then loads the per-video data URLs. `/heresphere` exposes the same JSON index for diagnostics, but it is an API endpoint rather than a page to open directly.
+The main page supports HereSphere's JSON web API discovery. In HereSphere, open the main page and press the **Web Stream** button in the upper-left. HereSphere POSTs `/heresphere` at the current browser origin, receives the library index, and then loads the per-video data URLs. `/heresphere` is an API endpoint rather than a page to open directly.
 
 API responses use `Content-Type: application/json` and `HereSphere-JSON-Version: 1`. The index uses HereSphere's `access` and `library` fields; each library entry points to video data containing `thumbnailImage`, `media`, and direct source URLs. This is the HereSphere schema, not the older DeoVR `scenes`/`video_url` schema. Projection and stereo fields are left unset when the playlist has no authoritative metadata so HereSphere can use its filename detection and user settings.
 
 Card links remain direct `/play/<id>` links. When the page is running inside HereSphere, JavaScript marks them as download links so HereSphere sends them to its native player instead of the embedded browser. Normal browsers retain their existing link behavior. The site does not redirect card clicks to JSON and does not implement browser-driven next-video events.
 
-Both Favorites and Library support Web Stream discovery by POSTing their current HTML page. After Web Stream imports either collection, HereSphere owns the playback queue, automatic next-video behavior, VR projection, and shuffle. The Library API preserves `fullNew.pls` order, and HereSphere's native Shuffle control randomizes playback when enabled. The website does not use undocumented queue or shuffle URL parameters. `/debrid` is unchanged.
+Favorites and Library use separate local origins because HereSphere discovers the root `/heresphere` endpoint for the current origin. Favorites remains on `PORT` (8080 by default). Opening Library redirects the browser to `LIBRARY_PORT` (8081 by default), where `/heresphere` returns only `PLSLibrary.all()` entries. Both listeners run in the same Python process over the same Flask application and shared stores. After Web Stream imports either collection, HereSphere owns the playback queue, automatic next-video behavior, VR projection, and shuffle. `/library/heresphere` remains available for diagnostics but is not used for native discovery. `/debrid` is unchanged.
 
 ## Build the Windows executable
 
@@ -58,7 +58,7 @@ Install `requirements-dev.txt`, then run:
 pyinstaller --clean HomeMediaManager.spec
 ```
 
-Copy `.env` and `playlist.json` beside the resulting executable. The build has no console window and bundles templates/static assets. If `bin/ffmpeg.exe` exists at build time, the spec includes it automatically. Review FFmpeg licensing and distribution terms before shipping it.
+Distribute the complete `dist/HomeMediaManager` folder and keep `.env`, `playlist.json`, and `fullNew.pls` beside `HomeMediaManager.exe`. The folder-based build avoids a second one-file extraction process, has no console window, starts both listeners automatically, and bundles templates/static assets. Private playlists, configuration, caches, thumbnails, and import/source lists are not bundled. If `bin/ffmpeg.exe` exists at build time, the spec includes it automatically; otherwise FFmpeg must be configured externally with `FFMPEG_PATH` or `PATH`. `ffprobe.exe` is not currently required. Review FFmpeg licensing and distribution terms before shipping it.
 
 ## Test
 
