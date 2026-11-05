@@ -9,8 +9,12 @@ import webbrowser
 from tkinter import messagebox, ttk
 
 from app import create_app
-from media_manager.config import AppConfig
+from media_manager.config import AppConfig, legacy_data_dir
+from media_manager.config_store import ConfigRepository, appdata_config_dir
 from media_manager.server import HereSphereServerGroup, lan_address
+from media_manager.setup_ui import run_setup_dialog
+from media_manager.single_instance import SingleInstance, bring_window_to_foreground
+from media_manager.tray import TrayController
 
 
 class QueueLogHandler(logging.Handler):
@@ -23,10 +27,13 @@ class QueueLogHandler(logging.Handler):
 
 
 class DesktopApp:
-    def __init__(self, root: tk.Tk):
+    def __init__(self, root: tk.Tk, instance: SingleInstance, config_repository: ConfigRepository):
         self.root = root
-        self.settings = AppConfig.load()
+        self.instance = instance
+        self.config_repository = config_repository
+        self.settings = AppConfig.load(repository=config_repository)
         self.messages: queue.Queue[str] = queue.Queue()
+        self.ui_actions: queue.Queue[tuple[str, str | None]] = queue.Queue()
         client_host = lan_address()
         self.local_url = f"http://127.0.0.1:{self.settings.port}"
         self.client_url = f"http://{client_host}:{self.settings.port}"
@@ -41,13 +48,19 @@ class DesktopApp:
         )
         self.favorites_server = self.server.favorites
         self.library_server = self.server.library
+        self.tray = TrayController(
+            lambda: self.request_ui_action("show"),
+            lambda: self.request_ui_action("exit"),
+        )
         self._closing = False
         self._closed = False
         self.status = tk.StringVar(value="Stopped")
         self.status_detail = tk.StringVar(value="The media server is not running.")
         self._build()
         self._configure_logging()
-        self.root.protocol("WM_DELETE_WINDOW", self.close)
+        self.root.protocol("WM_DELETE_WINDOW", self.hide_to_tray)
+        self.tray.start()
+        self.instance.start_restore_monitor(lambda: self.request_ui_action("show"))
         self.root.after(150, self._drain_logs)
         self.root.after_idle(self.start)
 
@@ -81,6 +94,7 @@ class DesktopApp:
         ttk.Label(url_row, text=self.client_url, font=("Consolas", 10)).pack(side="left", padx=8)
         ttk.Button(url_row, text="Open library", command=lambda: webbrowser.open(self.local_url)).pack(side="right")
         ttk.Button(url_row, text="Copy", command=self.copy_url).pack(side="right", padx=(0, 8))
+        ttk.Button(url_row, text="Settings", command=self.open_settings).pack(side="right", padx=(0, 8))
 
         warnings = self.settings.configuration_warnings()
         if warnings:
@@ -137,12 +151,55 @@ class DesktopApp:
         self.root.clipboard_append(self.client_url)
         self.status_detail.set("Client address copied to the clipboard.")
 
+    def open_settings(self) -> None:
+        if run_setup_dialog(self.root, self.config_repository, first_run=False):
+            messagebox.showinfo(
+                "Settings saved",
+                "Settings were saved securely. Exit and reopen Home Media Manager to apply them.",
+                parent=self.root,
+            )
+
     def _server_error(self, error: Exception) -> None:
         logging.error("Server error: %s", error)
         if not self._closing and not self._closed:
-            self.root.after(0, lambda: messagebox.showerror("Server error", str(error), parent=self.root))
+            self.request_ui_action("server_error", str(error))
+
+    def request_ui_action(self, action: str, detail: str | None = None) -> None:
+        self.ui_actions.put((action, detail))
+
+    def _drain_ui_actions(self) -> None:
+        while not self._closing and not self._closed:
+            try:
+                action, detail = self.ui_actions.get_nowait()
+            except queue.Empty:
+                return
+            if action == "show":
+                self.show_window()
+            elif action == "exit":
+                self.close()
+            elif action == "server_error":
+                messagebox.showerror("Server error", detail or "Unknown server error", parent=self.root)
+
+    def hide_to_tray(self) -> None:
+        if self._closing or self._closed:
+            return
+        self.root.withdraw()
+        logging.info("Home Media Manager hidden to the system tray")
+
+    def show_window(self) -> None:
+        if self._closing or self._closed:
+            return
+        self.root.deiconify()
+        self.root.state("normal")
+        self.root.lift()
+        self.root.update_idletasks()
+        bring_window_to_foreground(self.root.winfo_id())
+        self.root.focus_force()
 
     def _drain_logs(self) -> None:
+        if self._closing or self._closed:
+            return
+        self._drain_ui_actions()
         if self._closing or self._closed:
             return
         lines = []
@@ -169,20 +226,55 @@ class DesktopApp:
             logging.exception("Unable to stop all media listeners")
             messagebox.showerror("Shutdown error", str(exc), parent=self.root)
             return
+        try:
+            self.tray.stop()
+            self.instance.close()
+        except Exception as exc:
+            self._closing = False
+            logging.exception("Unable to complete desktop shutdown")
+            messagebox.showerror("Shutdown error", str(exc), parent=self.root)
+            return
         self._closed = True
         self.root.quit()
         self.root.destroy()
 
 
 def main() -> None:
-    root = tk.Tk()
-    desktop = DesktopApp(root)
+    instance = SingleInstance()
+    if not instance.acquire():
+        return
+    desktop = None
     try:
+        root = tk.Tk()
+        root.withdraw()
+        repository = ConfigRepository(legacy_dir=legacy_data_dir())
+        try:
+            repository.migrate_profile(appdata_config_dir())
+            repository.migrate_legacy()
+            if repository.is_configured:
+                repository.load()
+            elif not run_setup_dialog(root, repository, first_run=True):
+                root.destroy()
+                return
+        except Exception as exc:
+            messagebox.showwarning(
+                "Configuration needs attention",
+                f"The saved configuration could not be loaded. Please review the settings.\n\n{exc}",
+                parent=root,
+            )
+            if not run_setup_dialog(root, repository, first_run=not repository.is_configured):
+                root.destroy()
+                return
+        root.deiconify()
+        desktop = DesktopApp(root, instance, repository)
         root.mainloop()
     except KeyboardInterrupt:
         logging.info("Ctrl+C received; stopping media listeners")
     finally:
-        desktop.close()
+        if desktop is not None:
+            desktop.close()
+        else:
+            instance.close()
 
 
 if __name__ == "__main__":

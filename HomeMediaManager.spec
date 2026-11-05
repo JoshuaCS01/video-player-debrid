@@ -12,7 +12,7 @@ a = Analysis(
     pathex=[str(root)],
     binaries=binaries,
     datas=[(str(root / "templates"), "templates"), (str(root / "static"), "static")],
-    hiddenimports=[],
+    hiddenimports=["pystray._win32"],
 )
 pyz = PYZ(a.pure)
 exe = EXE(
@@ -21,6 +21,7 @@ exe = EXE(
     [],
     exclude_binaries=True,
     name="HomeMediaManager",
+    icon="static/img/logo.png",
     debug=False,
     strip=False,
     upx=True,

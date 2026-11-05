@@ -5,18 +5,30 @@ A small Windows desktop host and responsive Flask client for a local/Real-Debrid
 ## Run from source
 
 1. Create a virtual environment and install `requirements.txt`.
-2. Keep `.env` and `playlist.json` beside `desktop.py`.
-3. Run `python desktop.py`, then choose **Start server**.
+2. Run `python desktop.py`.
+3. Complete the first-run setup window. Every media feature is optional, so you can skip Real-Debrid, SMB, the PLS library, or FFmpeg and add it later.
 
-The desktop window shows the LAN address to open on phones, tablets, laptops, or TVs. `python app.py` remains available as a server-only entry point.
+The setup window appears before either server starts. The desktop window then shows the LAN address to open on phones, tablets, laptops, or TVs. Use **Settings** in the desktop window to update the same configuration later; restart Home Media Manager after saving settings. `python app.py` remains available as a server-only entry point.
 
-Supported `.env` settings:
+Only one desktop instance runs per Windows login session. Launching the shortcut again signals the existing process to restore its window instead of starting more listeners. Closing the window hides it to the notification area; use the tray icon's **Show Home Media Manager** command to restore it or **Exit** to stop both listeners and terminate the application.
+
+The packaged application uses a portable `userdata` folder beside `HomeMediaManager.exe`:
+
+- `userdata\config.json` contains non-secret settings.
+- `userdata\credentials.bin` contains the Real-Debrid values and Flask secret encrypted with Windows DPAPI for the current Windows user.
+- `userdata\data` contains Favorites, caches, generated thumbnails, and other runtime data.
+
+Keep the complete application folder in a writable location such as Desktop or Documents, not `Program Files`. Deleting that folder removes the packaged application and all data created by a new portable installation. Source-mode development continues to use `%LOCALAPPDATA%\HomeMediaManager` so private runtime files do not appear in the repository.
+
+Existing AppData installations are copied into `userdata` automatically on the first portable launch. The original AppData profile is retained as a safety backup until the user removes it after verifying the portable copy. A legacy `.env` is imported into the encrypted credential store; `playlist.json` and `.cache` are copied without deleting or changing their originals. An existing `fullNew.pls` remains at its current location and is referenced there. Environment variables continue to override saved values for source/headless use:
 
 - `REAL_DEBRID_TOKEN` and `REAL_DEBRID_CUSTOM_ID`
 - `SMB_FOLDER` (for example a mapped folder or UNC share)
 - `PORT` (Favorites, defaults to `8080`), `LIBRARY_PORT` (defaults to `8081`), and `HOST` (defaults to `0.0.0.0`)
 - `FFMPEG_PATH` (optional explicit path to FFmpeg)
+- `LIBRARY_PLAYLIST` (optional explicit path to `fullNew.pls`)
 - `SECRET_KEY` (optional persistent Flask session key)
+- `HOME_MEDIA_MANAGER_CONFIG_DIR` (optional override for the configuration root, useful for a future service/container deployment)
 
 `HOME_URL` is still accepted for compatibility but is no longer required; local entries are recognized by their non-HTTP URLs.
 
@@ -58,7 +70,7 @@ Install `requirements-dev.txt`, then run:
 pyinstaller --clean HomeMediaManager.spec
 ```
 
-Distribute the complete `dist/HomeMediaManager` folder and keep `.env`, `playlist.json`, and `fullNew.pls` beside `HomeMediaManager.exe`. The folder-based build avoids a second one-file extraction process, has no console window, starts both listeners automatically, and bundles templates/static assets. Private playlists, configuration, caches, thumbnails, and import/source lists are not bundled. If `bin/ffmpeg.exe` exists at build time, the spec includes it automatically; otherwise FFmpeg must be configured externally with `FFMPEG_PATH` or `PATH`. `ffprobe.exe` is not currently required. Review FFmpeg licensing and distribution terms before shipping it.
+Distribute the complete `dist/HomeMediaManager` folder. Users configure it through the first-run window, and the application creates its portable `userdata` folder on first launch. The folder-based build avoids a second one-file extraction process, has no console window, starts both listeners automatically after setup, and bundles templates/static assets. Private playlists, configuration, caches, thumbnails, and import/source lists are not bundled at build time. If `bin/ffmpeg.exe` exists at build time, the spec includes it automatically; otherwise FFmpeg can be selected in Settings or found through `PATH`. `ffprobe.exe` is not currently required. Review FFmpeg licensing and distribution terms before shipping it.
 
 ## Test
 
